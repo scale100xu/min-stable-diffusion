@@ -1,6 +1,6 @@
 # Stable Diffusion in pytorch
 
-A single file of Stable Diffusion. it is simple, easy reader 
+A single file of Stable Diffusion. It is simple, easy reader.I hope you enjoyed. I hope you can discovery light!!!
 
 The weights were ported from the original implementation.
 
@@ -14,6 +14,10 @@ The weights were ported from the original implementation.
 1. sd-v1-4.ckpt(4GB) https://drive.google.com/file/d/13XKPH-RdQ-vCvaJJgVR7W6q9R5XbaTLM/view?usp=share_link
 2. v1-5-pruned.ckpt(4GB, not include ema weights) https://drive.google.com/file/d/1IwBQ0DWfSNA50ymBvY0eby7v9RSIdSWu/view?usp=share_link
 3. mdjrny-v4.ckpt(4GB, some weights cast float16 to float32) https://drive.google.com/file/d/1-Z5bE9GBpuupuyhoXWFZiEtldBzVJ61X/view?usp=share_link
+4. waifu-diffusion-v1-4 weight
+5. animev3.pt
+6. Anything-V3.0.pt
+7. 4,5,6 and other down address is https://huggingface.co/xfh/min-stable-diffusion-pt/tree/main
 
 #### clone project
 
@@ -85,6 +89,12 @@ The following outputs have been generated using this implementation:
 2) anthropomorphic cat portrait art(mdjrny-v4.pt)
 
 ![a](rendered2.png)
+
+3) Kung Fu Panda(weight: wd-1-3-penultimate-ucg-cont.pt, steps:50)
+
+![a](rendered3.png)
+![a](rendered4.png)
+
 
 
 ## References
