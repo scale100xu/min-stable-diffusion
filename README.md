@@ -21,7 +21,7 @@ The weights were ported from the original implementation.
 git clone https://github.com/scale100xu/min-stable-diffusion.git
 ```
 
-#### Using pip without a virtual environment
+#### Using pip install
 
 Install dependencies using the `requirements.txt` file:
 
@@ -82,7 +82,7 @@ The following outputs have been generated using this implementation:
 
 ![a](rendered.png)
 
-1) anthropomorphic cat portrait art(mdjrny-v4.pt)
+2) anthropomorphic cat portrait art(mdjrny-v4.pt)
 
 ![a](rendered2.png)
 
