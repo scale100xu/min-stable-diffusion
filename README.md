@@ -1,6 +1,6 @@
 # Stable Diffusion in pytorch
 
-A single file of Stable Diffusion 
+A single file of Stable Diffusion. it is simple, easy reader 
 
 The weights were ported from the original implementation.
 
@@ -13,6 +13,7 @@ The weights were ported from the original implementation.
 
 1. sd-v1-4.ckpt(4GB) https://drive.google.com/file/d/13XKPH-RdQ-vCvaJJgVR7W6q9R5XbaTLM/view?usp=share_link
 2. v1-5-pruned.ckpt(4GB, not include ema weights) https://drive.google.com/file/d/1IwBQ0DWfSNA50ymBvY0eby7v9RSIdSWu/view?usp=share_link
+3. mdjrny-v4.ckpt(4GB, some weights cast float16 to float32) https://drive.google.com/file/d/1-Z5bE9GBpuupuyhoXWFZiEtldBzVJ61X/view?usp=share_link
 
 #### clone project
 
@@ -80,6 +81,10 @@ The following outputs have been generated using this implementation:
 1) anthropomorphic cat portrait art
 
 ![a](rendered.png)
+
+1) anthropomorphic cat portrait art(mdjrny-v4.pt)
+
+![a](rendered2.png)
 
 
 ## References
