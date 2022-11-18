@@ -72,7 +72,7 @@ python stable_diffusion.py --model_file="/tmp/stable_diffusion_v1_4.pt" --phrase
 ```
 
 The generated image will be named `/tmp/render.png` on the root of the repo.
-If you want to use a different name, use the `--output` flag.
+If you want to use a different name, use the `--out` flag.
 
 ```bash
 python stable_diffusion.py --model_file="/tmp/stable_diffusion_v1_4.pt"  --phrase="An astronaut riding a horse" --out="/tmp/image.png" --device_type="cuda"
