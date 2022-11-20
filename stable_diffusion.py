@@ -28,6 +28,9 @@ def apply_seq(seqs, x):
 def gelu(self):
     return 0.5 * self * (1 + torch.tanh(self * 0.7978845608 * (1 + 0.044715 * self * self)))
 
+def quick_gelu(x):
+    return x * torch.sigmoid(x * 1.702)
+
 class Normalize(Module):
     def __init__(self, in_channels, num_groups=32, name="normalize"):
         super(Normalize, self).__init__()
@@ -275,7 +278,7 @@ class GEGLU(Module):
 
     def forward(self, x):
         x, gate = self.proj(x).chunk(2, dim=-1)
-        return x * gelu(gate)
+        return x * quick_gelu(gate)
 
 class FeedForward(Module):
     def __init__(self, dim, mult=4, name="FeedForward"):
@@ -523,7 +526,7 @@ class CLIPMLP(Module):
 
     def forward(self, hidden_states):
         hidden_states = self.fc1(hidden_states)
-        hidden_states = gelu(hidden_states)
+        hidden_states = quick_gelu(hidden_states)
         hidden_states = self.fc2(hidden_states)
         return hidden_states
 
