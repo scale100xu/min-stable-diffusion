@@ -4,6 +4,9 @@ A single file of Stable Diffusion. It is simple, easy reader.I hope you enjoyed.
 
 The weights were ported from the original implementation.
 
+# web demo at huggingface
+
+https://huggingface.co/spaces/xfh/min-stable-diffusion-web
 
 ## Usage
 

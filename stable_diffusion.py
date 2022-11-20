@@ -18,7 +18,8 @@ from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 
-device = "cuda"
+device = "cpu"
+
 def apply_seq(seqs, x):
     for seq in seqs:
         x = seq(x)
@@ -684,7 +685,10 @@ def bytes_to_unicode():
     cs = [chr(n) for n in cs]
     return dict(zip(bs, cs))
 
+import threading
+
 class ClipTokenizer:
+    _instance_lock = threading.Lock()
     def __init__(self, bpe_path: str = default_bpe()):
         self.byte_encoder = bytes_to_unicode()
         merges = gzip.open(bpe_path).read().decode("utf-8").split('\n')
@@ -700,6 +704,13 @@ class ClipTokenizer:
         self.cache = {'<|startoftext|>': '<|startoftext|>', '<|endoftext|>': '<|endoftext|>'}
         self.pat = self.pat = re.compile(r"""<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[^\s]+""",
                                          re.IGNORECASE)
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        with ClipTokenizer._instance_lock:
+            if not hasattr(ClipTokenizer, "_instance"):
+                ClipTokenizer._instance = ClipTokenizer(*args, **kwargs)
+        return ClipTokenizer._instance
 
     def bpe(self, token):
         if token in self.cache:
@@ -752,8 +763,8 @@ class ClipTokenizer:
         if len(bpe_tokens) > 75:
             bpe_tokens = bpe_tokens[:75]
         return [49406] + bpe_tokens + [49407] * (77 - len(bpe_tokens) - 1)
-
 class StableDiffusion(Module):
+    _instance_lock = threading.Lock()
     def __init__(self, name="StableDiffusion"):
         super(StableDiffusion, self).__init__()
         self.betas = Parameter(torch.zeros(1000))
@@ -776,14 +787,149 @@ class StableDiffusion(Module):
             transformer=namedtuple("Transformer", ["text_model"])(text_model=self.text_decoder))
         self.name = name
 
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        with StableDiffusion._instance_lock:
+            if not hasattr(StableDiffusion, "_instance"):
+                StableDiffusion._instance = StableDiffusion(*args, **kwargs)
+        return StableDiffusion._instance
     # TODO: make forward run the model
 
 # Set Numpy and PyTorch seeds
-def set_seeds(seed, cuda):
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if cuda:
-        torch.cuda.manual_seed_all(seed)
+
+
+
+class Args(object):
+    def __init__(self, phrase, steps, model_type, guidance_scale, img_width, img_height, seed, device, model_file):
+        self.phrase = phrase
+        self.steps = steps
+        self.model_type = model_type
+        self.scale = guidance_scale
+        self.img_width = int(img_width)
+        self.img_height = int(img_height)
+        self.seed = seed
+        self.device = device
+        self.model_file = model_file
+
+
+class Text2img(Module):
+    _instance_lock = threading.Lock()
+    def __init__(self, args: Args):
+        super(Text2img, self).__init__()
+        self.is_load_model=False
+        self.args = args
+        self.model = StableDiffusion().instance()
+
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        with Text2img._instance_lock:
+            if not hasattr(Text2img, "_instance"):
+                Text2img._instance = Text2img(*args, **kwargs)
+        return Text2img._instance
+
+    def load_model(self):
+        if self.args.model_file != "" and self.is_load_model==False:
+            net = torch.load(self.args.model_file )
+            self.model.load_state_dict(net)
+            self.model = self.model.to(device)
+            self.is_load_model=True
+
+    def get_token_encode(self, phrase):
+        tokenizer = ClipTokenizer().instance()
+        phrase = tokenizer.encode(phrase)
+        with torch.no_grad():
+            context = self.model.text_decoder(phrase)
+            return context.to(self.args.device)
+    def forward(self, phrase:str):
+        self.set_seeds(True)
+        self.load_model()
+        context = self.get_token_encode(phrase)
+        unconditional_context = self.get_token_encode("")
+
+        timesteps = list(np.arange(1, 1000, 1000 // self.args.steps))
+        print(f"running for {timesteps} timesteps")
+        alphas = [self.model.alphas_cumprod[t] for t in timesteps]
+        alphas_prev = [1.0] + alphas[:-1]
+
+        latent_width = int(self.args.img_width) // 8
+        latent_height = int(self.args.img_height) // 8
+        # start with random noise
+        latent = torch.randn(1, 4, latent_height, latent_width)
+        latent = latent.to(self.args.device)
+        with torch.no_grad():
+            # this is diffusion
+            for index, timestep in (t := tqdm(list(enumerate(timesteps))[::-1])):
+                t.set_description("%3d %3d" % (index, timestep))
+                e_t = self.get_model_latent_output(latent.clone(), timestep, self.model.unet, context.clone(),
+                                       unconditional_context.clone())
+                x_prev, pred_x0 = self.get_x_prev_and_pred_x0(latent, e_t, index, alphas, alphas_prev)
+                # e_t_next = get_model_output(x_prev)
+                # e_t_prime = (e_t + e_t_next) / 2
+                # x_prev, pred_x0 = get_x_prev_and_pred_x0(latent, e_t_prime, index)
+                latent = x_prev
+        return self.latent_decode(latent, latent_height, latent_width)
+
+    def get_x_prev_and_pred_x0(self, x, e_t, index, alphas, alphas_prev):
+                temperature = 1
+                a_t, a_prev = alphas[index], alphas_prev[index]
+                sigma_t = 0
+                sqrt_one_minus_at = math.sqrt(1 - a_t)
+                # print(a_t, a_prev, sigma_t, sqrt_one_minus_at)
+
+                pred_x0 = (x - sqrt_one_minus_at * e_t) / math.sqrt(a_t)
+
+                # direction pointing to x_t
+                dir_xt = math.sqrt(1. - a_prev - sigma_t ** 2) * e_t
+                noise = sigma_t * torch.randn(*x.shape) * temperature
+
+                x_prev = math.sqrt(a_prev) * pred_x0 + dir_xt  # + noise
+                return x_prev, pred_x0
+
+    def get_model_latent_output(self, latent, t, unet, context, unconditional_context):
+            timesteps = torch.Tensor([t])
+            timesteps = timesteps.to(self.args.device)
+            unconditional_latent = unet(latent, timesteps, unconditional_context)
+            latent = unet(latent, timesteps, context)
+
+            unconditional_guidance_scale = self.args.scale
+            e_t = unconditional_latent + unconditional_guidance_scale * (latent - unconditional_latent)
+            del unconditional_latent, latent, timesteps, context
+            return e_t
+
+    def latent_decode(self, latent, latent_height, latent_width):
+        # upsample latent space to image with autoencoder
+        # x = model.first_stage_model.post_quant_conv( 8* latent)
+        x = self.model.first_stage_model.post_quant_conv(1 / 0.18215 * latent)
+        x = x.to(self.args.device)
+        x = self.model.first_stage_model.decoder(x)
+        x = x.to(self.args.device)
+
+        # make image correct size and scale
+        x = (x + 1.0) / 2.0
+        x = x.reshape(3, latent_height * 8, latent_width * 8).permute(1, 2, 0)
+        decode_latent = (x.detach().cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+        return decode_latent
+    def decode_latent2img(self, decode_latent):
+        # save image
+        from PIL import Image
+        img = Image.fromarray(decode_latent)
+        return img
+
+    def set_seeds(self, cuda):
+        np.random.seed(self.args.seed)
+        torch.manual_seed(self.args.seed)
+        if cuda:
+            torch.cuda.manual_seed_all(self.args.seed)
+@lru_cache()
+def text2img(phrase, steps, model_file, guidance_scale, img_width, img_height, seed, device):
+    try:
+        args = Args(phrase, steps, None, guidance_scale, img_width, img_height, seed, device, model_file)
+        im = Text2img.instance(args).forward(args.phrase)
+        im = Text2img.instance(args).decode_latent2img(im)
+    finally:
+        pass
+    return im
 
 # this is sd-v1-4.ckpt
 FILENAME = "/tmp/stable_diffusion_v1_4.pt"
@@ -798,7 +944,7 @@ if __name__ == "__main__":
     parser.add_argument('--phrase', type=str, default="anthropomorphic cat portrait art ", help="Phrase to render")
     parser.add_argument('--out', type=str, default="/tmp/rendered.png", help="Output filename")
     parser.add_argument('--scale', type=float, default=7.5,  help="unconditional guidance scale")
-    parser.add_argument('--model_file', type=str, default="/tmp/stable_diffusion_v1_4.pt",  help="model weight file")
+    parser.add_argument('--model_file', type=str, default="/tmp/mdjrny-v4.pt",  help="model weight file")
     parser.add_argument('--img_width', type=int, default=512,  help="output image width")
     parser.add_argument('--img_height', type=int, default=512,  help="output image height")
     parser.add_argument('--seed', type=int, default=443,  help="random seed")
@@ -807,102 +953,6 @@ if __name__ == "__main__":
 
     device = args.device_type
 
-    set_seeds(args.seed, True)
-    model = StableDiffusion()
-
-    if args.model_file!="":
-        net = torch.load(args.model_file)
-    else:
-        net = torch.load(FILENAME)
-    model.load_state_dict(net)
-
-    model = model.to(device)
-    # args.phrase = "Jeflon Zuckergates"
-    tokenizer = ClipTokenizer()
-    phrase = tokenizer.encode(args.phrase)
-    context = model.cond_stage_model.transformer.text_model(phrase)
-    context = context.to(device)
-
-    phrase = tokenizer.encode("")
-    unconditional_context = model.cond_stage_model.transformer.text_model(phrase)
-    unconditional_context = unconditional_context.to(device)
-
-    # done with clip model
-    del model.cond_stage_model
-
-
-    def get_model_output(latent, t, unet, context, unconditional_context):
-        timesteps = Tensor([t])
-        timesteps = timesteps.to(device)
-        unconditional_latent = unet(latent, timesteps, unconditional_context)
-        latent = unet(latent, timesteps, context)
-
-        unconditional_guidance_scale = args.scale
-        e_t = unconditional_latent + unconditional_guidance_scale * (latent - unconditional_latent)
-        del unconditional_latent, latent, timesteps, context
-        return e_t
-
-    timesteps = list(np.arange(1, 1000, 1000 // args.steps))
-    print(f"running for {timesteps} timesteps")
-    alphas = [model.alphas_cumprod[t] for t in timesteps]
-    alphas_prev = [1.0] + alphas[:-1]
-
-
-
-    def get_x_prev_and_pred_x0(x, e_t, index):
-        temperature = 1
-        a_t, a_prev = alphas[index], alphas_prev[index]
-        sigma_t = 0
-        sqrt_one_minus_at = math.sqrt(1 - a_t)
-        # print(a_t, a_prev, sigma_t, sqrt_one_minus_at)
-
-        pred_x0 = (x - sqrt_one_minus_at * e_t) / math.sqrt(a_t)
-
-        # direction pointing to x_t
-        dir_xt = math.sqrt(1. - a_prev - sigma_t ** 2) * e_t
-        noise = sigma_t * torch.randn(*x.shape) * temperature
-
-        x_prev = math.sqrt(a_prev) * pred_x0 + dir_xt  # + noise
-        return x_prev, pred_x0
-
-    latent_width = args.img_width//8
-    latent_height = args.img_height//8
-    # start with random noise
-    latent = torch.randn(1, 4, latent_height, latent_width)
-    latent = latent.to(device)
-    with torch.no_grad():
-        # this is diffusion
-
-        for index, timestep in (t := tqdm(list(enumerate(timesteps))[::-1])):
-            t.set_description("%3d %3d" % (index, timestep))
-            e_t = get_model_output(latent.clone(), timestep, model.unet, context.clone(), unconditional_context.clone())
-            x_prev, pred_x0 = get_x_prev_and_pred_x0(latent, e_t, index)
-            # e_t_next = get_model_output(x_prev)
-            # e_t_prime = (e_t + e_t_next) / 2
-            # x_prev, pred_x0 = get_x_prev_and_pred_x0(latent, e_t_prime, index)
-            latent = x_prev
-
-
-
-    del model.model,model.unet
-
-    # upsample latent space to image with autoencoder
-    # x = model.first_stage_model.post_quant_conv( 8* latent)
-    x = model.first_stage_model.post_quant_conv(1 / 0.18215 * latent)
-    x = x.to(device)
-    x = model.first_stage_model.decoder(x)
-    x = x.to(device)
-
-
-    # make image correct size and scale
-    x = (x + 1.0) / 2.0
-    x = x.reshape(3, latent_height*8, latent_width*8).permute(1, 2, 0)
-    dat = (x.detach().cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
-    print(dat.shape)
-
-    # save image
-    from PIL import Image
-
-    im = Image.fromarray(dat)
+    im = text2img(args.phrase, args.steps, args.model_file, args.scale, args.img_width, args.img_height, args.seed, args.device_type)
     print(f"saving {args.out}")
     im.save(args.out)
