@@ -43,27 +43,29 @@ python stable_diffusion.py --help
 ```
 
 ```
-usage: stable_diffusion.py [-h] [--steps STEPS] [--phrase PHRASE] [--out OUT] [--scale SCALE] [--model_file MODEL_FILE] [--img_width IMG_WIDTH] [--img_height IMG_HEIGHT] [--seed SEED]
-                           [--device_type DEVICE_TYPE]
+usage: stable_diffusion.py [-h] [--steps STEPS] [--phrase PHRASE] [--unphrase UNPHRASE] [--out OUT] [--scale SCALE] [--model_file MODEL_FILE]
+                           [--img_width IMG_WIDTH] [--img_height IMG_HEIGHT] [--seed SEED] [--device_type DEVICE_TYPE] [--input_image INPUT_IMAGE]
 
 Run Stable Diffusion
 
 options:
   -h, --help            show this help message and exit
-  --steps STEPS         Number of steps in diffusion (default: 25)
+  --steps STEPS         Number of steps in diffusion (default: 50)
   --phrase PHRASE       Phrase to render (default: anthropomorphic cat portrait art )
+  --unphrase UNPHRASE   unconditional Phrase to render (default: )
   --out OUT             Output filename (default: /tmp/rendered.png)
   --scale SCALE         unconditional guidance scale (default: 7.5)
   --model_file MODEL_FILE
-                        model weight file (default: /tmp/stable_diffusion_v1_4.pt)
+                        model weight file (default: ../min-stable-diffusion-pt/mdjrny-v4.pt)
   --img_width IMG_WIDTH
                         output image width (default: 512)
   --img_height IMG_HEIGHT
                         output image height (default: 512)
   --seed SEED           random seed (default: 443)
   --device_type DEVICE_TYPE
-                        random seed (default: cpu)
-
+                        device type, support: cpu;cuda;mps (default: cpu)
+  --input_image INPUT_IMAGE
+                        input image file (default: )
 ```
 ### Using `stable_diffusion.py` from the git repo
 

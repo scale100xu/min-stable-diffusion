@@ -12,13 +12,13 @@ from collections import namedtuple
 import numpy as np
 from tqdm import tqdm
 
-
-from torch.nn import Conv2d, Linear,  Module,SiLU, UpsamplingNearest2d,ModuleList
+# ,
+from torch.nn import Conv2d, Linear,  Module, SiLU, UpsamplingNearest2d,ModuleList,ZeroPad2d
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.parameter import Parameter
 
-device = "cpu"
+device = "mps"
 
 def apply_seq(seqs, x):
     for seq in seqs:
@@ -31,6 +31,12 @@ def gelu(self):
 def quick_gelu(x):
     return x * torch.sigmoid(x * 1.702)
 
+# class SiLU(Module):
+#     def __init__(self):
+#         super(SiLU, self).__init__()
+#         self.gelu = quick_gelu
+#     def forward(self,x ):
+#         return self.gelu(x)
 class Normalize(Module):
     def __init__(self, in_channels, num_groups=32, name="normalize"):
         super(Normalize, self).__init__()
@@ -166,13 +172,13 @@ class Encoder(Module):
         self.down = ModuleList([
             ResnetBlock(128, 128, name=name + "_down_block_0_0_ResnetBlock"),
             ResnetBlock(128, 128, name=name + "_down_block_0_1_ResnetBlock"),
-            Conv2d(128, 128, 3, stride=2, padding=(0, 1, 0, 1)),
+            Conv2d(128, 128, 3, stride=2, padding=(0, 0)),
             ResnetBlock(128, 256, name=name + "_down_block_1_0_ResnetBlock"),
             ResnetBlock(256, 256, name=name + "_down_block_1_1_ResnetBlock"),
-            Conv2d(256, 256, 3, stride=2, padding=(0, 1, 0, 1)),
+            Conv2d(256, 256, 3, stride=2, padding=(0, 0)),
             ResnetBlock(256, 512, name=name + "_down_block_2_0_ResnetBlock"),
             ResnetBlock(512, 512, name=name + "_down_block_2_1_ResnetBlock"),
-            Conv2d(512, 512, 3, stride=2, padding=(0, 1, 0, 1)),
+            Conv2d(512, 512, 3, stride=2, padding=(0, 0)),
             ResnetBlock(512, 512, name=name + "_down_block_3_0_ResnetBlock"),
             ResnetBlock(512, 512, name=name + "_down_block_3_1_ResnetBlock"),
         ])
@@ -181,12 +187,17 @@ class Encoder(Module):
         self.norm_out = Normalize(512, name=name+"_norm_out_Normalize")
         self.conv_out = Conv2d(512, 8, 3, padding=1)
         self.name = name
+        self.zero_pad2d_0_1 = ZeroPad2d((0,1,0,1))
 
     def forward(self, x):
         x = self.conv_in(x)
 
         for l in self.down:
-            x = l(x)
+            # x = l(x)
+            if isinstance(l, Conv2d):
+                x = l(self.zero_pad2d_0_1(x))
+            else:
+                x = l(x)
         x = self.mid(x)
         return self.conv_out(F.silu(self.norm_out(x)))
 
@@ -637,7 +648,8 @@ class CLIPTextTransformer(Module):
         self.encoder = CLIPEncoder(name=name+"_CLIPEncoder_0")
         self.final_layer_norm = Normalize(768, num_groups=None, name=name+"_CLIPTextTransformer_normalizer_0")
         # 上三角都是 -inf 值
-        self.causal_attention_mask = Tensor(np.triu(np.ones((1, 1, 77, 77), dtype=np.float32) * -np.inf, k=1)).to(device)
+        triu = np.triu(np.ones((1, 1, 77, 77), dtype=np.float32) * -np.inf, k=1)
+        self.causal_attention_mask = Tensor(triu).to(device)
         self.name = name
 
     def forward(self, input_ids):
@@ -804,7 +816,7 @@ class StableDiffusion(Module):
 
 
 class Args(object):
-    def __init__(self, phrase, steps, model_type, guidance_scale, img_width, img_height, seed, device, model_file):
+    def __init__(self, phrase, steps, model_type, guidance_scale, img_width, img_height, seed, device, model_file, input_image:str="", input_mask:str="", input_image_strength=0.5, unphrase=""):
         self.phrase = phrase
         self.steps = steps
         self.model_type = model_type
@@ -814,22 +826,41 @@ class Args(object):
         self.seed = seed
         self.device = device
         self.model_file = model_file
+        self.input_image = input_image
+        self.input_mask = input_mask
+        self.input_image_strength = input_image_strength
+        self.unphrase = unphrase
 
+from PIL import Image
 
-class Text2img(Module):
+class Generate2img(Module):
     _instance_lock = threading.Lock()
     def __init__(self, args: Args):
-        super(Text2img, self).__init__()
+        super(Generate2img, self).__init__()
         self.is_load_model=False
         self.args = args
         self.model = StableDiffusion().instance()
+        self.get_input_image_tensor()
+        # self.get_input_mask_tensor()
+
+
+    def get_input_image_tensor(self):
+        if self.args.input_image!="":
+            input_image = Image.open(args.input_image).convert("RGB").resize((self.args.img_width, self.args.img_height), resample=Image.Resampling.LANCZOS)
+            self.input_image_array = torch.from_numpy(np.array(input_image)).to(device)
+            self.input_image_tensor = torch.from_numpy((np.array(input_image, dtype=np.float32)[None, ..., :3]/ 255.0*2.0-1))
+            self.input_image_tensor = self.input_image_tensor.permute(0, 3, 1, 2) # bs, channel, height, width
+        else:
+            self.input_image_tensor = None
+        return self.input_image_tensor
+
 
     @classmethod
     def instance(cls, *args, **kwargs):
-        with Text2img._instance_lock:
-            if not hasattr(Text2img, "_instance"):
-                Text2img._instance = Text2img(*args, **kwargs)
-        return Text2img._instance
+        with Generate2img._instance_lock:
+            if not hasattr(Generate2img, "_instance"):
+                Generate2img._instance = Generate2img(*args, **kwargs)
+        return Generate2img._instance
 
     def load_model(self):
         if self.args.model_file != "" and self.is_load_model==False:
@@ -841,6 +872,7 @@ class Text2img(Module):
     def get_token_encode(self, phrase):
         tokenizer = ClipTokenizer().instance()
         phrase = tokenizer.encode(phrase)
+        # phrase = phrase + [49407] * (77 - len(phrase))
         with torch.no_grad():
             context = self.model.text_decoder(phrase)
             return context.to(self.args.device)
@@ -848,7 +880,7 @@ class Text2img(Module):
         self.set_seeds(True)
         self.load_model()
         context = self.get_token_encode(phrase)
-        unconditional_context = self.get_token_encode("")
+        unconditional_context = self.get_token_encode(self.args.unphrase)
 
         timesteps = list(np.arange(1, 1000, 1000 // self.args.steps))
         print(f"running for {timesteps} timesteps")
@@ -857,9 +889,26 @@ class Text2img(Module):
 
         latent_width = int(self.args.img_width) // 8
         latent_height = int(self.args.img_height) // 8
+
+
+        input_image_latent = None
+        input_img_noise_t = None
+        if self.input_image_tensor!=None:
+            noise_index = int(len(timesteps) * self.args.input_image_strength)
+            if noise_index >= len(timesteps):
+                noise_index = noise_index - 1
+            input_img_noise_t = timesteps[noise_index]
+            with torch.no_grad():
+                filter = lambda x:x[:,:4,:,:] * 0.18215
+                input_image_latent = self.model.first_stage_model.encoder(self.input_image_tensor.to(device))
+                input_image_latent = self.model.first_stage_model.quant_conv(input_image_latent)
+                input_image_latent = filter(input_image_latent) # only the means
+
         # start with random noise
-        latent = torch.randn(1, 4, latent_height, latent_width)
+        latent = self.get_noise_latent( 1,  latent_height, latent_width, input_image_latent, input_img_noise_t, None)
+
         latent = latent.to(self.args.device)
+
         with torch.no_grad():
             # this is diffusion
             for index, timestep in (t := tqdm(list(enumerate(timesteps))[::-1])):
@@ -867,11 +916,14 @@ class Text2img(Module):
                 e_t = self.get_model_latent_output(latent.clone(), timestep, self.model.unet, context.clone(),
                                        unconditional_context.clone())
                 x_prev, pred_x0 = self.get_x_prev_and_pred_x0(latent, e_t, index, alphas, alphas_prev)
+                latent = x_prev
                 # e_t_next = get_model_output(x_prev)
                 # e_t_prime = (e_t + e_t_next) / 2
                 # x_prev, pred_x0 = get_x_prev_and_pred_x0(latent, e_t_prime, index)
-                latent = x_prev
-        return self.latent_decode(latent, latent_height, latent_width)
+        decode = self.latent_decode(latent, latent_height, latent_width)
+
+        return decode
+
 
     def get_x_prev_and_pred_x0(self, x, e_t, index, alphas, alphas_prev):
                 temperature = 1
@@ -900,6 +952,27 @@ class Text2img(Module):
             del unconditional_latent, latent, timesteps, context
             return e_t
 
+
+    def add_noise(self, x , t , noise=None ):
+        # batch_size, channel, h, w = x.shape
+        if noise is None:
+            noise = torch.normal(0,1, size=(x.shape))
+        # sqrt_alpha_prod = _ALPHAS_CUMPROD[t] ** 0.5
+        sqrt_alpha_prod = self.model.sqrt_alphas_cumprod[t]
+        sqrt_one_minus_alpha_prod = self.model.sqrt_one_minus_alphas_cumprod[t]
+        # sqrt_one_minus_alpha_prod = (1 - _ALPHAS_CUMPROD[t]) ** 0.5
+
+        return  sqrt_alpha_prod * x + sqrt_one_minus_alpha_prod * noise.to(device)
+
+    def get_noise_latent(self, batch_size, latent_height, latent_width, input_image_latent=None, input_img_noise_t=None, noise=None):
+
+        if input_image_latent is None:
+            latent = torch.normal(0,1, size=(batch_size, 4, latent_height, latent_width))
+            # latent = torch.randn((batch_size, 4, latent_height, latent_width))
+        else:
+            latent = self.add_noise(input_image_latent, input_img_noise_t, noise)
+        return latent.to(device)
+
     def latent_decode(self, latent, latent_height, latent_width):
         # upsample latent space to image with autoencoder
         # x = model.first_stage_model.post_quant_conv( 8* latent)
@@ -915,8 +988,7 @@ class Text2img(Module):
         return decode_latent
     def decode_latent2img(self, decode_latent):
         # save image
-        from PIL import Image
-        img = Image.fromarray(decode_latent)
+        img = Image.fromarray(decode_latent, mode="RGB")
         return img
 
     def set_seeds(self, cuda):
@@ -925,11 +997,11 @@ class Text2img(Module):
         if cuda:
             torch.cuda.manual_seed_all(self.args.seed)
 @lru_cache()
-def text2img(phrase, steps, model_file, guidance_scale, img_width, img_height, seed, device):
+def generate2img(phrase, steps, model_file, guidance_scale, img_width, img_height, seed, device, input_image, input_mask, input_image_strength=0.5, unphrase=""):
     try:
-        args = Args(phrase, steps, None, guidance_scale, img_width, img_height, seed, device, model_file)
-        im = Text2img.instance(args).forward(args.phrase)
-        im = Text2img.instance(args).decode_latent2img(im)
+        args = Args(phrase, steps, None, guidance_scale, img_width, img_height, seed, device, model_file, input_image, input_mask, input_image_strength, unphrase)
+        im = Generate2img.instance(args).forward(args.phrase)
+        im = Generate2img.instance(args).decode_latent2img(im)
     finally:
         pass
     return im
@@ -943,19 +1015,20 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Run Stable Diffusion',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--steps', type=int, default=25, help="Number of steps in diffusion")
+    parser.add_argument('--steps', type=int, default=50, help="Number of steps in diffusion")
     parser.add_argument('--phrase', type=str, default="anthropomorphic cat portrait art ", help="Phrase to render")
+    parser.add_argument('--unphrase', type=str, default="", help="unconditional Phrase to render")
     parser.add_argument('--out', type=str, default="/tmp/rendered.png", help="Output filename")
     parser.add_argument('--scale', type=float, default=7.5,  help="unconditional guidance scale")
-    parser.add_argument('--model_file', type=str, default="/tmp/mdjrny-v4.pt",  help="model weight file")
+    parser.add_argument('--model_file', type=str, default="../min-stable-diffusion-pt/mdjrny-v4.pt",  help="model weight file")
     parser.add_argument('--img_width', type=int, default=512,  help="output image width")
     parser.add_argument('--img_height', type=int, default=512,  help="output image height")
     parser.add_argument('--seed', type=int, default=443,  help="random seed")
-    parser.add_argument('--device_type', type=str, default="cpu",  help="random seed")
+    parser.add_argument('--device_type', type=str, default="cpu",  help="device type, support: cpu;cuda;mps")
+    parser.add_argument('--input_image', type=str, default="",  help="input image file")
     args = parser.parse_args()
-
     device = args.device_type
 
-    im = text2img(args.phrase, args.steps, args.model_file, args.scale, args.img_width, args.img_height, args.seed, args.device_type)
+    im = generate2img(args.phrase, args.steps, args.model_file, args.scale, args.img_width, args.img_height, args.seed, args.device_type, args.input_image, "", 1, args.unphrase)
     print(f"saving {args.out}")
     im.save(args.out)
